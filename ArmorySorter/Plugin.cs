@@ -77,7 +77,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
                     continue;
                 }
 
-                var result = im->MoveItemSlot(bag, (ushort)slot, target.Value, (ushort)free, 1);
+                var result = im->MoveItemSlot(bag, (ushort)slot, target.Value, (ushort)free, true);
                 if (result == 0) moved++;
                 else Log.Warning($"MoveItemSlot returned {result} for {row.Name}");
             }
