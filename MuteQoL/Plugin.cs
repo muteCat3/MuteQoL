@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Configuration;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Bindings.ImGui;
@@ -22,9 +23,10 @@ public sealed class Configuration : IPluginConfiguration
     public int Version { get; set; } = 1;
     public bool Auto { get; set; } = true;
     public List<string> HiddenAddons { get; set; } = [];
+    public List<uint> KeepItems { get; set; } = [];
 }
 
-public sealed unsafe class Plugin : IDalamudPlugin
+public sealed unsafe partial class Plugin : IDalamudPlugin
 {
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
@@ -182,6 +184,15 @@ public sealed unsafe class Plugin : IDalamudPlugin
         var name = parts.Length > 1 ? parts[1] : "";
         switch (verb)
         {
+            case "sell":
+                SellPreview();
+                break;
+            case "keep" or "unkeep" when name.Length > 0:
+                KeepCommand(verb == "keep", name);
+                break;
+            case "keeplist":
+                Chat.Print($"[MuteQoL] never sold: {(config.KeepItems.Count == 0 ? "(none)" : string.Join(", ", config.KeepItems.Select(ItemName)))}");
+                break;
             case "nodes" when name.Length > 0:
                 DumpNodes(name);
                 break;
@@ -204,6 +215,32 @@ public sealed unsafe class Plugin : IDalamudPlugin
                 Chat.Print($"[MuteQoL] hidden: {(config.HiddenAddons.Count == 0 ? "(none)" : string.Join(", ", config.HiddenAddons))}");
                 break;
         }
+    }
+
+    private string ItemName(uint id) =>
+        DataManager.GetExcelSheet<Item>().TryGetRow(id, out var row) ? row.Name.ToString() : id.ToString();
+
+    // /qol keep <item name or id>: items on this list are never sold. An item link typed into the command works too.
+    private void KeepCommand(bool keep, string text)
+    {
+        var items = DataManager.GetExcelSheet<Item>();
+        var wanted = text.Trim();
+        uint id = 0;
+        if (uint.TryParse(wanted, out var parsed)) id = parsed;
+        else
+        {
+            foreach (var row in items)
+                if (row.Name.ToString().Equals(wanted, StringComparison.OrdinalIgnoreCase)) { id = row.RowId; break; }
+        }
+        if (id == 0 || !items.TryGetRow(id, out _))
+        {
+            Chat.Print($"[MuteQoL] no item named '{wanted}'.");
+            return;
+        }
+        if (keep && !config.KeepItems.Contains(id)) config.KeepItems.Add(id);
+        if (!keep) config.KeepItems.Remove(id);
+        PluginInterface.SavePluginConfig(config);
+        Chat.Print($"[MuteQoL] {ItemName(id)} will {(keep ? "never" : "again be considered to")} be sold.");
     }
 
     // /qol find: lists the visible UI elements under the mouse cursor so the right addon name can be hidden.
