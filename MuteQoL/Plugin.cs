@@ -103,25 +103,76 @@ public sealed unsafe class Plugin : IDalamudPlugin
         }
         else
         {
-            foreach (var name in config.HiddenAddons)
-            {
-                var addon = GameGui.GetAddonByName(name);
-                if (addon.IsNull) continue;
-                ((AtkUnitBase*)addon.Address)->IsVisible = false;
-                hiddenNow.Add(name);
-            }
+            foreach (var spec in config.HiddenAddons)
+                if (SetVisible(spec, false)) hiddenNow.Add(spec);
         }
         ctrlWasDown = ctrl;
     }
 
     private void SetHiddenVisible(bool visible)
     {
-        foreach (var name in hiddenNow)
-        {
-            var addon = GameGui.GetAddonByName(name);
-            if (!addon.IsNull) ((AtkUnitBase*)addon.Address)->IsVisible = visible;
-        }
+        foreach (var spec in hiddenNow) SetVisible(spec, visible);
         hiddenNow.Clear();
+    }
+
+    // spec is "Addon" for a whole element or "Addon:12" / "Addon:12>3" for one node inside it.
+    private bool SetVisible(string spec, bool visible)
+    {
+        var parts = spec.Split(':', 2);
+        var addon = GameGui.GetAddonByName(parts[0]);
+        if (addon.IsNull) return false;
+        var unit = (AtkUnitBase*)addon.Address;
+        if (parts.Length == 1)
+        {
+            unit->IsVisible = visible;
+            return true;
+        }
+        var node = FindNode(unit, parts[1]);
+        if (node == null) return false;
+        node->ToggleVisibility(visible);
+        return true;
+    }
+
+    private static AtkResNode* FindNode(AtkUnitBase* unit, string path)
+    {
+        var manager = &unit->UldManager;
+        AtkResNode* node = null;
+        foreach (var part in path.Split('>'))
+        {
+            if (!uint.TryParse(part, out var id) || manager == null) return null;
+            node = null;
+            for (var i = 0; i < manager->NodeListCount; i++)
+                if (manager->NodeList[i] != null && manager->NodeList[i]->NodeId == id) { node = manager->NodeList[i]; break; }
+            if (node == null) return null;
+            manager = (ushort)node->Type >= 1000 ? &((AtkComponentNode*)node)->Component->UldManager : null;
+        }
+        return node;
+    }
+
+    // /qol nodes <addon>: lists the parts of one UI element (and one level of sub-parts) with ids and sizes.
+    private void DumpNodes(string addonName)
+    {
+        var addon = GameGui.GetAddonByName(addonName);
+        if (addon.IsNull)
+        {
+            Chat.Print($"[MuteQoL] {addonName} is not loaded.");
+            return;
+        }
+        DumpManager(&((AtkUnitBase*)addon.Address)->UldManager, "", 0);
+    }
+
+    private void DumpManager(AtkUldManager* manager, string prefix, int depth)
+    {
+        for (var i = 0; i < manager->NodeListCount; i++)
+        {
+            var node = manager->NodeList[i];
+            if (node == null) continue;
+            var component = (ushort)node->Type >= 1000;
+            if (node->Width > 150 || node->Height > 150) continue; // the lock is a small element
+            Chat.Print($"[MuteQoL] {prefix}{node->NodeId} type {(ushort)node->Type} {(int)node->Width}x{(int)node->Height} at {(int)node->X},{(int)node->Y} visible={node->IsVisible()}");
+            if (component && depth < 1)
+                DumpManager(&((AtkComponentNode*)node)->Component->UldManager, $"{node->NodeId}>", depth + 1);
+        }
     }
 
     private void OnQolCommand(string command, string args)
@@ -131,6 +182,9 @@ public sealed unsafe class Plugin : IDalamudPlugin
         var name = parts.Length > 1 ? parts[1] : "";
         switch (verb)
         {
+            case "nodes" when name.Length > 0:
+                DumpNodes(name);
+                break;
             case "find":
                 findAll = name.Equals("all", StringComparison.OrdinalIgnoreCase);
                 findRequested = true;
