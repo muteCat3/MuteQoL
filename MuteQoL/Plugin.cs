@@ -165,11 +165,13 @@ public sealed unsafe class Plugin : IDalamudPlugin
             var unit = list->Entries[i].Value;
             if (unit == null || !unit->IsVisible) continue;
             float x = unit->X, y = unit->Y, w = unit->GetScaledWidth(true), h = unit->GetScaledHeight(true);
-            if (mouse.X < x || mouse.X > x + w || mouse.Y < y || mouse.Y > y + h) continue;
-            Chat.Print($"[MuteQoL] under cursor: {unit->NameString} ({(int)w}x{(int)h})");
+            if (w > 400 || h > 400) continue; // skip full-screen overlays and wide bars
+            const float margin = 40; // small icons are hard to hit exactly
+            if (mouse.X < x - margin || mouse.X > x + w + margin || mouse.Y < y - margin || mouse.Y > y + h + margin) continue;
+            Chat.Print($"[MuteQoL] near cursor: {unit->NameString} ({(int)w}x{(int)h} at {(int)x},{(int)y})");
             found++;
         }
-        if (found == 0) Chat.Print("[MuteQoL] nothing under the cursor.");
+        if (found == 0) Chat.Print("[MuteQoL] nothing small near the cursor.");
     }
 
     private void OnUpdate(IFramework framework)
