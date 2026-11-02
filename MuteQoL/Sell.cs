@@ -44,10 +44,11 @@ public sealed unsafe partial class Plugin
 
         var gear = new List<SellCandidate>();
         var priced = new List<Item>();
+        var currentMateria = CurrentMateriaIds();
         foreach (var (id, qty) in bagItems)
         {
             if (!items.TryGetRow(id, out var row)) continue;
-            if (gearsetItems.Contains(id) || config.KeepItems.Contains(id)) continue;
+            if (gearsetItems.Contains(id) || config.KeepItems.Contains(id) || currentMateria.Contains(id)) continue;
             if (row.PriceLow == 0) continue; // the vendor does not buy it
             if (UnlockState.IsItemUnlockable(row) && !UnlockState.IsItemUnlocked(row)) continue; // not collected yet
 
@@ -77,6 +78,22 @@ public sealed unsafe partial class Plugin
             }
             _ = Framework.RunOnFrameworkThread(() => PrintSellPreview(sell, noData));
         });
+    }
+
+    // The two highest materia grades that exist in the game data are "current" and never sold.
+    private HashSet<uint> CurrentMateriaIds()
+    {
+        var ids = new HashSet<uint>();
+        var sheet = DataManager.GetExcelSheet<Materia>();
+        var top = -1;
+        foreach (var row in sheet)
+            for (var i = 0; i < row.Item.Count; i++)
+                if (row.Item[i].RowId != 0) top = Math.Max(top, i);
+        if (top < 0) return ids;
+        foreach (var row in sheet)
+            for (var i = Math.Max(0, top - 1); i <= top && i < row.Item.Count; i++)
+                if (row.Item[i].RowId != 0) ids.Add(row.Item[i].RowId);
+        return ids;
     }
 
     private void PrintSellPreview(List<SellCandidate> sell, int noData)
