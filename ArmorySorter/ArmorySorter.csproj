@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.1.0.0</Version>
+    <Author>muteCat3</Author>
+    <Name>ArmorySorter</Name>
+    <Punchline>Moves crafter gear and gearset items into the Armoury Chest.</Punchline>
+    <Description>Moves crafter gear and every item registered in a gearset from your inventory into the matching Armoury Chest slot. Use /armorysort to preview and /armorysort run to move.</Description>
+    <RepoUrl>https://github.com/muteCat3/ArmorySorter</RepoUrl>
+    <Tags>inventory;armoury;sort</Tags>
+  </PropertyGroup>
+</Project>
