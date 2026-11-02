@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using Dalamud.Configuration;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Command;
+using Dalamud.Game.Inventory.InventoryEventArgTypes;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -10,6 +13,13 @@ using Lumina.Excel.Sheets;
 
 namespace ArmorySorter;
 
+[Serializable]
+public sealed class Configuration : IPluginConfiguration
+{
+    public int Version { get; set; } = 1;
+    public bool Auto { get; set; } = true;
+}
+
 public sealed unsafe class Plugin : IDalamudPlugin
 {
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
@@ -17,8 +27,12 @@ public sealed unsafe class Plugin : IDalamudPlugin
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IChatGui Chat { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    [PluginService] internal static IGameInventory GameInventory { get; private set; } = null!;
+    [PluginService] internal static IFramework Framework { get; private set; } = null!;
+    [PluginService] internal static ICondition Condition { get; private set; } = null!;
 
     private const string CommandName = "/armorysort";
+    private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(1);
 
     private static readonly InventoryType[] Bags =
     [
@@ -26,19 +40,66 @@ public sealed unsafe class Plugin : IDalamudPlugin
         InventoryType.Inventory3, InventoryType.Inventory4,
     ];
 
+    private static readonly ConditionFlag[] Busy =
+    [
+        ConditionFlag.InCombat, ConditionFlag.Crafting, ConditionFlag.PreparingToCraft,
+        ConditionFlag.Gathering, ConditionFlag.BetweenAreas, ConditionFlag.BetweenAreas51,
+    ];
+
+    private readonly Configuration config;
+    private DateTime? dueAt;
+
     public Plugin()
     {
+        config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Preview what would move to the Armoury Chest. '/armorysort run' moves it.",
+            HelpMessage = "'/armorysort' previews, '/armorysort run' moves, '/armorysort auto' toggles automatic sorting.",
         });
+        GameInventory.InventoryChanged += OnInventoryChanged;
+        Framework.Update += OnUpdate;
     }
 
-    public void Dispose() => CommandManager.RemoveHandler(CommandName);
+    public void Dispose()
+    {
+        Framework.Update -= OnUpdate;
+        GameInventory.InventoryChanged -= OnInventoryChanged;
+        CommandManager.RemoveHandler(CommandName);
+    }
+
+    private void OnInventoryChanged(IReadOnlyCollection<InventoryEventArgs> events)
+    {
+        if (config.Auto) dueAt = DateTime.UtcNow + Debounce;
+    }
+
+    private void OnUpdate(IFramework framework)
+    {
+        if (dueAt is not { } due || DateTime.UtcNow < due) return;
+        foreach (var flag in Busy)
+            if (Condition[flag])
+            {
+                dueAt = DateTime.UtcNow + Debounce; // try again once the player is free
+                return;
+            }
+        dueAt = null;
+        Sort(run: true, quiet: true);
+    }
 
     private void OnCommand(string command, string args)
     {
-        var run = args.Trim().Equals("run", StringComparison.OrdinalIgnoreCase);
+        var arg = args.Trim();
+        if (arg.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            config.Auto = !config.Auto;
+            PluginInterface.SavePluginConfig(config);
+            Chat.Print($"[ArmorySorter] automatic sorting {(config.Auto ? "on" : "off")}.");
+            return;
+        }
+        Sort(arg.Equals("run", StringComparison.OrdinalIgnoreCase), quiet: false);
+    }
+
+    private void Sort(bool run, bool quiet)
+    {
         var im = InventoryManager.Instance();
         if (im == null) return;
 
@@ -66,7 +127,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
                 var free = FindFreeSlot(dest);
                 if (free < 0)
                 {
-                    Chat.Print($"[ArmorySorter] {target}: full, skipped {row.Name}");
+                    if (!quiet) Chat.Print($"[ArmorySorter] {target}: full, skipped {row.Name}");
                     continue;
                 }
 
@@ -78,18 +139,22 @@ public sealed unsafe class Plugin : IDalamudPlugin
                 }
 
                 var result = im->MoveItemSlot(bag, (ushort)slot, target.Value, (ushort)free, true);
-                if (result == 0) moved++;
+                if (result == 0)
+                {
+                    moved++;
+                    if (quiet) Chat.Print($"[ArmorySorter] moved {row.Name} -> {target}");
+                }
                 else Log.Warning($"MoveItemSlot returned {result} for {row.Name}");
             }
         }
 
+        if (quiet) return;
         Chat.Print(run
             ? $"[ArmorySorter] moved {moved} item(s)."
             : $"[ArmorySorter] preview: {candidates} item(s). Use /armorysort run to move.");
     }
 
-    // Crafter and gatherer gear. The class job category names are confirmed on the first
-    // preview run (see /xllog) before anything is moved for real.
+    // Crafter and gatherer gear (confirmed in game: the Cosmic Round Knife matches).
     private static bool IsCrafterOrGatherer(Item row)
     {
         var name = row.ClassJobCategory.ValueNullable?.Name.ToString() ?? "";
