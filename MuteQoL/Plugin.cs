@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using Dalamud.Configuration;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Keys;
 using Dalamud.Game.Command;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using Dalamud.Game.Inventory.InventoryEventArgTypes;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -11,13 +14,14 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI.Misc;
 using Lumina.Excel.Sheets;
 
-namespace ArmorySorter;
+namespace MuteQoL;
 
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
     public bool Auto { get; set; } = true;
+    public List<string> HiddenAddons { get; set; } = [];
 }
 
 public sealed unsafe class Plugin : IDalamudPlugin
@@ -30,8 +34,16 @@ public sealed unsafe class Plugin : IDalamudPlugin
     [PluginService] internal static IGameInventory GameInventory { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
+    [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
+    [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
 
     private const string CommandName = "/armorysort";
+    private const string QolCommand = "/qol";
+
+    // Addons we hid ourselves, so releasing Ctrl only restores those and nothing else.
+    private readonly HashSet<string> hiddenNow = [];
+    private bool ctrlWasDown;
+    private bool findRequested;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(1);
 
     private static readonly InventoryType[] Bags =
@@ -56,12 +68,20 @@ public sealed unsafe class Plugin : IDalamudPlugin
         {
             HelpMessage = "'/armorysort' previews, '/armorysort run' moves, '/armorysort auto' toggles automatic sorting.",
         });
+        CommandManager.AddHandler(QolCommand, new CommandInfo(OnQolCommand)
+        {
+            HelpMessage = "/qol find (hover an element first), /qol hide <addon>, /qol show <addon>, /qol list. Hidden elements appear while Ctrl is held.",
+        });
         GameInventory.InventoryChanged += OnInventoryChanged;
         Framework.Update += OnUpdate;
+        PluginInterface.UiBuilder.Draw += OnDraw;
     }
 
     public void Dispose()
     {
+        PluginInterface.UiBuilder.Draw -= OnDraw;
+        SetHiddenVisible(true);
+        CommandManager.RemoveHandler(QolCommand);
         Framework.Update -= OnUpdate;
         GameInventory.InventoryChanged -= OnInventoryChanged;
         CommandManager.RemoveHandler(CommandName);
@@ -72,8 +92,89 @@ public sealed unsafe class Plugin : IDalamudPlugin
         if (config.Auto) dueAt = DateTime.UtcNow + Debounce;
     }
 
+    // Hidden elements stay hidden unless Ctrl is held; the same for every job.
+    private void UpdateHiddenAddons()
+    {
+        var ctrl = KeyState[VirtualKey.CONTROL];
+        if (ctrl)
+        {
+            if (!ctrlWasDown) SetHiddenVisible(true);
+        }
+        else
+        {
+            foreach (var name in config.HiddenAddons)
+            {
+                var addon = GameGui.GetAddonByName(name);
+                if (addon.IsNull) continue;
+                ((AtkUnitBase*)addon.Address)->IsVisible = false;
+                hiddenNow.Add(name);
+            }
+        }
+        ctrlWasDown = ctrl;
+    }
+
+    private void SetHiddenVisible(bool visible)
+    {
+        foreach (var name in hiddenNow)
+        {
+            var addon = GameGui.GetAddonByName(name);
+            if (!addon.IsNull) ((AtkUnitBase*)addon.Address)->IsVisible = visible;
+        }
+        hiddenNow.Clear();
+    }
+
+    private void OnQolCommand(string command, string args)
+    {
+        var parts = args.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var verb = parts.Length > 0 ? parts[0].ToLowerInvariant() : "list";
+        var name = parts.Length > 1 ? parts[1] : "";
+        switch (verb)
+        {
+            case "find":
+                findRequested = true;
+                break;
+            case "hide" when name.Length > 0:
+                if (!config.HiddenAddons.Contains(name)) config.HiddenAddons.Add(name);
+                PluginInterface.SavePluginConfig(config);
+                Chat.Print($"[MuteQoL] {name} is hidden; hold Ctrl to show it.");
+                break;
+            case "show" when name.Length > 0:
+                config.HiddenAddons.Remove(name);
+                PluginInterface.SavePluginConfig(config);
+                SetHiddenVisible(true);
+                Chat.Print($"[MuteQoL] {name} is no longer hidden.");
+                break;
+            default:
+                Chat.Print($"[MuteQoL] hidden: {(config.HiddenAddons.Count == 0 ? "(none)" : string.Join(", ", config.HiddenAddons))}");
+                break;
+        }
+    }
+
+    // /qol find: lists the visible UI elements under the mouse cursor so the right addon name can be hidden.
+    private void OnDraw()
+    {
+        if (!findRequested) return;
+        findRequested = false;
+        var mouse = ImGui.GetIO().MousePos;
+        var manager = AtkStage.Instance()->RaptureAtkUnitManager;
+        if (manager == null) return;
+        var list = &manager->AtkUnitManager.AllLoadedUnitsList;
+        var found = 0;
+        for (var i = 0; i < list->Count; i++)
+        {
+            var unit = list->Entries[i].Value;
+            if (unit == null || !unit->IsVisible) continue;
+            float x = unit->X, y = unit->Y, w = unit->GetScaledWidth(true), h = unit->GetScaledHeight(true);
+            if (mouse.X < x || mouse.X > x + w || mouse.Y < y || mouse.Y > y + h) continue;
+            Chat.Print($"[MuteQoL] under cursor: {unit->NameString} ({(int)w}x{(int)h})");
+            found++;
+        }
+        if (found == 0) Chat.Print("[MuteQoL] nothing under the cursor.");
+    }
+
     private void OnUpdate(IFramework framework)
     {
+        UpdateHiddenAddons();
         if (dueAt is not { } due || DateTime.UtcNow < due) return;
         foreach (var flag in Busy)
             if (Condition[flag])
@@ -92,7 +193,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
         {
             config.Auto = !config.Auto;
             PluginInterface.SavePluginConfig(config);
-            Chat.Print($"[ArmorySorter] automatic sorting {(config.Auto ? "on" : "off")}.");
+            Chat.Print($"[MuteQoL] automatic sorting {(config.Auto ? "on" : "off")}.");
             return;
         }
         Sort(arg.Equals("run", StringComparison.OrdinalIgnoreCase), quiet: false);
@@ -127,14 +228,14 @@ public sealed unsafe class Plugin : IDalamudPlugin
                 var free = FindFreeSlot(dest);
                 if (free < 0)
                 {
-                    if (!quiet) Chat.Print($"[ArmorySorter] {target}: full, skipped {row.Name}");
+                    if (!quiet) Chat.Print($"[MuteQoL] {target}: full, skipped {row.Name}");
                     continue;
                 }
 
                 candidates++;
                 if (!run)
                 {
-                    Chat.Print($"[ArmorySorter] would move {row.Name} (ilvl {row.LevelItem.RowId}) -> {target}");
+                    Chat.Print($"[MuteQoL] would move {row.Name} (ilvl {row.LevelItem.RowId}) -> {target}");
                     continue;
                 }
 
@@ -142,7 +243,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
                 if (result == 0)
                 {
                     moved++;
-                    if (quiet) Chat.Print($"[ArmorySorter] moved {row.Name} -> {target}");
+                    if (quiet) Chat.Print($"[MuteQoL] moved {row.Name} -> {target}");
                 }
                 else Log.Warning($"MoveItemSlot returned {result} for {row.Name}");
             }
@@ -150,8 +251,8 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
         if (quiet) return;
         Chat.Print(run
-            ? $"[ArmorySorter] moved {moved} item(s)."
-            : $"[ArmorySorter] preview: {candidates} item(s). Use /armorysort run to move.");
+            ? $"[MuteQoL] moved {moved} item(s)."
+            : $"[MuteQoL] preview: {candidates} item(s). Use /armorysort run to move.");
     }
 
     // Crafter and gatherer gear (confirmed in game: the Cosmic Round Knife matches).
