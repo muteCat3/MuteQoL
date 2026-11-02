@@ -44,6 +44,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
     private readonly HashSet<string> hiddenNow = [];
     private bool ctrlWasDown;
     private bool findRequested;
+    private bool findAll;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(1);
 
     private static readonly InventoryType[] Bags =
@@ -131,6 +132,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
         switch (verb)
         {
             case "find":
+                findAll = name.Equals("all", StringComparison.OrdinalIgnoreCase);
                 findRequested = true;
                 break;
             case "hide" when name.Length > 0:
@@ -160,6 +162,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
         if (manager == null) return;
         var list = &manager->AtkUnitManager.AllLoadedUnitsList;
         var found = 0;
+        Chat.Print($"[MuteQoL] cursor at {(int)mouse.X},{(int)mouse.Y}");
         for (var i = 0; i < list->Count; i++)
         {
             var unit = list->Entries[i].Value;
@@ -167,7 +170,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
             float x = unit->X, y = unit->Y, w = unit->GetScaledWidth(true), h = unit->GetScaledHeight(true);
             if (w > 400 || h > 400) continue; // skip full-screen overlays and wide bars
             const float margin = 40; // small icons are hard to hit exactly
-            if (mouse.X < x - margin || mouse.X > x + w + margin || mouse.Y < y - margin || mouse.Y > y + h + margin) continue;
+            if (!findAll && (mouse.X < x - margin || mouse.X > x + w + margin || mouse.Y < y - margin || mouse.Y > y + h + margin)) continue;
             Chat.Print($"[MuteQoL] near cursor: {unit->NameString} ({(int)w}x{(int)h} at {(int)x},{(int)y})");
             found++;
         }
