@@ -187,6 +187,9 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
             case "sell":
                 SellPreview();
                 break;
+            case "why" when name.Length > 0:
+                SellWhy(name);
+                break;
             case "keep" or "unkeep" when name.Length > 0:
                 KeepCommand(verb == "keep", name);
                 break;

@@ -91,6 +91,38 @@ public sealed unsafe partial class Plugin
         });
     }
 
+    // /qol why <item name or id>: shows how each sell rule judges one item.
+    private void SellWhy(string text)
+    {
+        var items = DataManager.GetExcelSheet<Item>();
+        var wanted = text.Trim();
+        uint id = 0;
+        if (uint.TryParse(wanted, out var parsed)) id = parsed;
+        else
+            foreach (var r in items)
+                if (r.Name.ToString().Equals(wanted, StringComparison.OrdinalIgnoreCase)) { id = r.RowId; break; }
+        if (id == 0 || !items.TryGetRow(id, out var row))
+        {
+            Chat.Print($"[MuteQoL] no item named '{wanted}'.");
+            return;
+        }
+
+        var equip = row.EquipSlotCategory.RowId != 0;
+        var lines = new[]
+        {
+            $"{row.Name} (id {id})",
+            $"in a gearset: {GetGearsetItemIds().Contains(id)}",
+            $"on the keep list: {config.KeepItems.Contains(id)}",
+            $"vendor pays: {row.PriceLow} gil (0 = vendor will not buy)",
+            $"equipment: {equip}, item level {row.LevelItem.RowId} (sold below {MinGearItemLevel})",
+            $"crafter/gatherer gear: {IsCrafterOrGatherer(row)}",
+            $"materia: {row.ItemUICategory.RowId == MateriaUiCategory}, current materia: {CurrentMateriaIds().Contains(id)}",
+            $"collectable: {UnlockState.IsItemUnlockable(row)}, already owned: {UnlockState.IsItemUnlockable(row) && UnlockState.IsItemUnlocked(row)}",
+            $"sellable on the market board: {row.ItemSearchCategory.RowId > 0}",
+        };
+        foreach (var line in lines) Chat.Print($"[MuteQoL] {line}");
+    }
+
     // The two highest materia grades that exist in the game data are "current" and never sold.
     private HashSet<uint> CurrentMateriaIds()
     {
