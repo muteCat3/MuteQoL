@@ -184,6 +184,9 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         var name = parts.Length > 1 ? parts[1] : "";
         switch (verb)
         {
+            case "probe":
+                SellProbe();
+                break;
             case "sell":
                 SellPreview();
                 break;
@@ -274,6 +277,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     private void OnUpdate(IFramework framework)
     {
         UpdateHiddenAddons();
+        ProbeTick();
         if (dueAt is not { } due || DateTime.UtcNow < due) return;
         foreach (var flag in Busy)
             if (Condition[flag])
