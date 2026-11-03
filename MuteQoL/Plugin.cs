@@ -24,6 +24,7 @@ public sealed class Configuration : IPluginConfiguration
     public bool Auto { get; set; } = true;
     public List<string> HiddenAddons { get; set; } = [];
     public List<uint> KeepItems { get; set; } = [];
+    public bool AutoSell { get; set; }
 }
 
 public sealed unsafe partial class Plugin : IDalamudPlugin
@@ -188,7 +189,13 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
                 SellProbe();
                 break;
             case "sell":
-                SellPreview(name.Equals("run", StringComparison.OrdinalIgnoreCase));
+                if (name.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.AutoSell = !config.AutoSell;
+                    PluginInterface.SavePluginConfig(config);
+                    Chat.Print($"[MuteQoL] selling when a shop opens is {(config.AutoSell ? "on" : "off")}.");
+                }
+                else SellPreview(name.Equals("run", StringComparison.OrdinalIgnoreCase));
                 break;
             case "why" when name.Length > 0:
                 SellWhy(name);
@@ -279,6 +286,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         UpdateHiddenAddons();
         ProbeTick();
         SellTick();
+        AutoSellTick();
         if (dueAt is not { } due || DateTime.UtcNow < due) return;
         foreach (var flag in Busy)
             if (Condition[flag])

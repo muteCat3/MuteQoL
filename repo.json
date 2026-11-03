@@ -3,7 +3,7 @@
     "Author": "muteCat3",
     "Name": "MuteQoL",
     "InternalName": "MuteQoL",
-    "AssemblyVersion": "0.6.1.0",
+    "AssemblyVersion": "0.7.0.0",
     "Punchline": "Small quality-of-life tools: armoury sorting and hideable UI elements.",
     "Description": "Moves crafter gear and gearset items into the Armoury Chest (/armorysort). Hides chosen UI elements until Ctrl is held (/qol).",
     "RepoUrl": "https://github.com/muteCat3/MuteQoL",
