@@ -58,7 +58,8 @@ public sealed unsafe partial class Plugin
             var text = v->Type is AtkValueType.String or AtkValueType.ManagedString or AtkValueType.String8
                 ? v->String.ToString()
                 : v->Type == AtkValueType.Int ? v->Int.ToString() : "";
-            Chat.Print($"[MuteQoL] menu value {i}: {v->Type} {text}");
+            Log.Information($"[MuteQoL probe] value {i}: {v->Type} {text}");
+            if (text.Length > 0 || (v->Type == AtkValueType.Int && v->Int != 0)) Chat.Print($"[MuteQoL] menu value {i}: {v->Type} {text}");
         }
     }
 }
