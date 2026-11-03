@@ -1,15 +1,19 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MuteQoL;
 
-// Sells one item through the item context menu while a vendor is open. Every slot is tried once per shop visit.
+// Sells the listed items one by one through the item context menu while a vendor is open.
+// Every slot is tried once per shop visit, and a run stops at a hard attempt limit.
 public sealed unsafe partial class Plugin
 {
     private enum SellStep { Idle, MenuOpening, Verifying }
+
+    private const int MaxSellAttempts = 60;
 
     private SellStep sellStep = SellStep.Idle;
     private int sellFrames;
@@ -17,19 +21,46 @@ public sealed unsafe partial class Plugin
     private string sellItemName = "";
     private InventoryType sellBag;
     private int sellSlot;
+    private int sellAttempts, sellSold, sellFailed;
     private readonly HashSet<(InventoryType, int)> triedSlots = [];
+    private readonly Queue<SellCandidate> sellQueue = new();
 
-    private void StartSellOne(SellCandidate c)
+    private void EnqueueSells(List<SellCandidate> sell)
     {
-        var shop = GameGui.GetAddonByName("Shop");
-        if (shop.IsNull)
+        if (GameGui.GetAddonByName("Shop").IsNull)
         {
             Chat.Print("[MuteQoL] open a vendor's shop window first.");
             return;
         }
+        if (sellStep != SellStep.Idle || sellQueue.Count > 0) return;
+        foreach (var c in sell.OrderBy(c => c.Row.Name.ToString())) sellQueue.Enqueue(c);
+        sellAttempts = sellSold = sellFailed = 0;
+        NextSell();
+    }
+
+    // Takes the next untried slot of the front candidate; a candidate is done when no untried slot is left.
+    private void NextSell()
+    {
+        while (sellQueue.Count > 0)
+        {
+            if (sellAttempts >= MaxSellAttempts)
+            {
+                Chat.Print("[MuteQoL] reached the attempt limit for this run, stopping.");
+                sellQueue.Clear();
+                break;
+            }
+            if (TryStartSell(sellQueue.Peek())) { sellAttempts++; return; }
+            sellQueue.Dequeue();
+        }
+        Chat.Print($"[MuteQoL] sell run finished: {sellSold} sold, {sellFailed} not sold.");
+    }
+
+    private bool TryStartSell(SellCandidate c)
+    {
+        var shop = GameGui.GetAddonByName("Shop");
         var im = InventoryManager.Instance();
         var agent = AgentInventoryContext.Instance();
-        if (im == null || agent == null || sellStep != SellStep.Idle) return;
+        if (shop.IsNull || im == null || agent == null) return false;
 
         foreach (var bag in Bags)
         {
@@ -48,15 +79,25 @@ public sealed unsafe partial class Plugin
                 agent->OpenForItemSlot(bag, slot, 0, ((AtkUnitBase*)shop.Address)->Id);
                 sellStep = SellStep.MenuOpening;
                 sellFrames = 5;
-                return;
+                return true;
             }
         }
-        Chat.Print($"[MuteQoL] {c.Row.Name}: no untried slot left in this shop visit.");
+        return false;
     }
 
     private void SellTick()
     {
-        if (GameGui.GetAddonByName("Shop").IsNull) triedSlots.Clear(); // a new shop visit starts fresh
+        if (GameGui.GetAddonByName("Shop").IsNull)
+        {
+            triedSlots.Clear(); // a new shop visit starts fresh
+            if (sellQueue.Count > 0 || sellStep != SellStep.Idle)
+            {
+                sellQueue.Clear(); // the shop was closed: stop the run
+                sellStep = SellStep.Idle;
+                Chat.Print($"[MuteQoL] shop closed, sell run stopped: {sellSold} sold, {sellFailed} not sold.");
+            }
+            return;
+        }
         if (sellStep == SellStep.Idle || --sellFrames > 0) return;
 
         if (sellStep == SellStep.MenuOpening)
@@ -66,7 +107,9 @@ public sealed unsafe partial class Plugin
             if (index < 0)
             {
                 Chat.Print($"[MuteQoL] {sellItemName}: no 'Sell' entry in the menu, skipped.");
+                sellFailed++;
                 sellStep = SellStep.Idle;
+                NextSell();
                 return;
             }
             var values = stackalloc AtkValue[5];
@@ -83,13 +126,17 @@ public sealed unsafe partial class Plugin
         var container = im == null ? null : im->GetInventoryContainer(sellBag);
         var item = container == null ? null : container->GetInventorySlot(sellSlot);
         var stillThere = item != null && item->ItemId % 1_000_000 == sellItemId;
-        Chat.Print(stillThere
-            ? $"[MuteQoL] {sellItemName} is still in the slot: not sold (will not be retried in this shop visit)."
-            : $"[MuteQoL] sold {sellItemName}.");
+        if (stillThere)
+        {
+            sellFailed++;
+            Chat.Print($"[MuteQoL] {sellItemName} is still in the slot: not sold (not retried in this shop visit).");
+        }
+        else sellSold++;
         sellStep = SellStep.Idle;
+        NextSell();
     }
 
-    // Menu entries are string values; "Sell" is the first one. The callback index is its position among the entries.
+    // Menu entries are string values; the callback index is the position of "Sell" among them.
     private static int FindSellIndex(AtkUnitBase* menu)
     {
         var position = 0;

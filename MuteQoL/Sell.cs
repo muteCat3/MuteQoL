@@ -90,7 +90,7 @@ public sealed unsafe partial class Plugin
             _ = Framework.RunOnFrameworkThread(() =>
             {
                 PrintSellPreview(sell, noData);
-                if (run && sell.Count > 0) StartSellOne(sell.OrderBy(c => c.Row.Name.ToString()).First());
+                if (run && sell.Count > 0) EnqueueSells(sell);
             });
         });
     }
