@@ -22,7 +22,7 @@ public sealed unsafe partial class Plugin
 
     private sealed record SellCandidate(Item Row, uint ItemId, int Quantity, string Reason, int? MarketPrice);
 
-    private void SellPreview()
+    private void SellPreview(bool run = false)
     {
         var im = InventoryManager.Instance();
         if (im == null) return;
@@ -87,7 +87,11 @@ public sealed unsafe partial class Plugin
                 if (price < MaxPrice)
                     sell.Add(new SellCandidate(row, row.RowId, bagItems[row.RowId], $"{kind}, market ~{price} gil", price));
             }
-            _ = Framework.RunOnFrameworkThread(() => PrintSellPreview(sell, noData));
+            _ = Framework.RunOnFrameworkThread(() =>
+            {
+                PrintSellPreview(sell, noData);
+                if (run && sell.Count > 0) StartSellOne(sell.OrderBy(c => c.Row.Name.ToString()).First());
+            });
         });
     }
 

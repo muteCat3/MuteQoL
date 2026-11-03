@@ -188,7 +188,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
                 SellProbe();
                 break;
             case "sell":
-                SellPreview();
+                SellPreview(name.Equals("run", StringComparison.OrdinalIgnoreCase));
                 break;
             case "why" when name.Length > 0:
                 SellWhy(name);
@@ -278,6 +278,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     {
         UpdateHiddenAddons();
         ProbeTick();
+        SellTick();
         if (dueAt is not { } due || DateTime.UtcNow < due) return;
         foreach (var flag in Busy)
             if (Condition[flag])
