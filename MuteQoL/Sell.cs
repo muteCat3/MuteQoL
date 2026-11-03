@@ -17,6 +17,7 @@ public sealed unsafe partial class Plugin
 
     private const int MaxPrice = 1000;      // market items worth less than this (gil) go to the vendor
     private const int MinGearItemLevel = 760; // gear below this item level goes to the vendor
+    private const uint MateriaUiCategory = 58; // ItemUICategory "Materia"
 
 
     private sealed record SellCandidate(Item Row, uint ItemId, int Quantity, string Reason, int? MarketPrice);
@@ -42,39 +43,49 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        var gear = new List<SellCandidate>();
-        var priced = new List<Item>();
+        // Only three kinds are ever sold: gear below the item level, materia that is not current, and
+        // collectables already owned. Everything else (ingredients, food, potions) is left alone.
+        var gear = new List<SellCandidate>();   // untradable gear: no market price to check
+        var priced = new List<(Item Row, string Kind)>();
         var currentMateria = CurrentMateriaIds();
         foreach (var (id, qty) in bagItems)
         {
             if (!items.TryGetRow(id, out var row)) continue;
-            if (gearsetItems.Contains(id) || config.KeepItems.Contains(id) || currentMateria.Contains(id)) continue;
+            if (gearsetItems.Contains(id) || config.KeepItems.Contains(id)) continue;
             if (row.PriceLow == 0) continue; // the vendor does not buy it
-            if (UnlockState.IsItemUnlockable(row) && !UnlockState.IsItemUnlocked(row)) continue; // not collected yet
 
+            string kind;
             if (row.EquipSlotCategory.RowId != 0)
             {
-                if (IsCrafterOrGatherer(row)) continue;
-                if (row.LevelItem.RowId < MinGearItemLevel)
-                    gear.Add(new SellCandidate(row, id, qty, $"gear ilvl {row.LevelItem.RowId}", null));
+                if (IsCrafterOrGatherer(row) || row.LevelItem.RowId >= MinGearItemLevel) continue;
+                kind = $"gear ilvl {row.LevelItem.RowId}";
             }
-            else if (row.ItemSearchCategory.RowId > 0)
+            else if (row.ItemUICategory.RowId == MateriaUiCategory)
             {
-                priced.Add(row);
+                if (currentMateria.Contains(id)) continue;
+                kind = "materia";
             }
+            else if (UnlockState.IsItemUnlockable(row) && UnlockState.IsItemUnlocked(row))
+            {
+                kind = "already collected";
+            }
+            else continue;
+
+            if (row.ItemSearchCategory.RowId > 0) priced.Add((row, kind));
+            else if (row.EquipSlotCategory.RowId != 0) gear.Add(new SellCandidate(row, id, qty, kind, null));
         }
 
         var worldId = PlayerState.HomeWorld.RowId;
-        _ = Universalis.GetPrices(priced.Select(r => r.RowId).ToList(), worldId).ContinueWith(t =>
+        _ = Universalis.GetPrices(priced.Select(p => p.Row.RowId).ToList(), worldId).ContinueWith(t =>
         {
             var prices = t.Result;
             var sell = new List<SellCandidate>(gear);
             var noData = 0;
-            foreach (var row in priced)
+            foreach (var (row, kind) in priced)
             {
                 if (!prices.TryGetValue(row.RowId, out var price)) { noData++; continue; }
                 if (price < MaxPrice)
-                    sell.Add(new SellCandidate(row, row.RowId, bagItems[row.RowId], $"market ~{price} gil", price));
+                    sell.Add(new SellCandidate(row, row.RowId, bagItems[row.RowId], $"{kind}, market ~{price} gil", price));
             }
             _ = Framework.RunOnFrameworkThread(() => PrintSellPreview(sell, noData));
         });
